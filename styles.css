@@ -1,0 +1,65 @@
+body {
+  font-family: Arial, sans-serif;
+  line-height: 1.6;
+  padding: 20px;
+  background-color: #3d3d3d;
+  color: white; 
+}
+
+table {
+  width: 90%;
+  border-collapse: collapse;
+  margin: 20px auto; 
+  border: 2px solid #ccc;
+}
+
+th, td {
+  border: 1px solid #ccc; 
+  padding: 10px;
+  text-align: left;
+}
+
+th {
+  background-color: #adafad; 
+  color: white; 
+}
+
+tr:nth-child(even) {
+  background-color: #3d3d3d; 
+}
+
+tr:nth-child(odd) {
+  background-color: #3d3d3d; 
+}
+
+td {
+  color: white;
+}
+
+td a {
+  color: #bbbcbd; 
+  text-decoration: none; 
+}
+
+.chart-container {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+#sectorChart {
+  max-width: 200px;
+  max-height: 200px;
+}
+
+td.amount {
+  font-weight: bold;
+}
+
+td.amount.positive {
+  color: green;
+}
+
+td.amount.negative {
+  color: red;
+}

@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stocks Portfolio</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+</head>
+<body>
+  <h1>Stocks Portfolio</h1>
+
+  <div id="portfolioList">
+    <h2>Portfolios</h2>
+    <ul id="portfolioItems"></ul>
+  </div>
+
+  <div id="mainContent" style="display: none;">
+    <div class="chart-container">
+      <canvas id="sectorChart"></canvas>
+    </div>
+    <div class="chart-container">
+      <canvas id="lineChart"></canvas>
+    </div>
+    <table id="stocksTable">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Name</th>
+          <th>Buy Price</th>
+          <th>Buy Date</th>
+          <th>Current Price</th>
+          <th>Price Difference</th>
+          <th>Amount Gained/Lost</th>
+          <th>Quantity</th>
+          <th>Exchange</th>
+          <th>Sector</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <script>
+    const apiKey = 'hm3ZDMECS42P8qWzyQha7afYendO20Ft8yUtQXVS';
+    const cacheDuration = 5 * 60 * 1000; 
+    const cache = {};
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const portfolioItems = document.getElementById('portfolioItems');
+      const mainContent = document.getElementById('mainContent');
+      const tableBody = document.querySelector('#stocksTable tbody');
+
+      const fetchPortfolios = async () => {
+        try {
+          const response = await fetch('http://localhost:3000/api/portfolios');
+          if (!response.ok) {
+            throw new Error(`HTTP error! Status: ${response.status}`);
+          }
+          const portfolios = await response.json();
+          console.log('Fetched portfolios:', portfolios);
+
+          portfolios.forEach(portfolio => {
+            const li = document.createElement('li');
+            li.textContent = portfolio.portfolio_name; 
+            li.addEventListener('click', () => showPortfolio(portfolio.portfolioid, portfolio.portfolio_name));
+            portfolioItems.appendChild(li);
+          });
+        } catch (error) {
+          console.error('Error fetching portfolios:', error);
+        }
+      };
+
+      const showPortfolio = async (portfolioid, portfolioNameText) => {
+        try {
+          const response = await fetch(`http://localhost:3000/api/stocks?portfolioid=${portfolioid}`);
+          if (!response.ok) {
+            throw new Error(`HTTP error! Status: ${response.status}`);
+          }
+          const stocks = await response.json();
+          console.log(`Fetched stocks for portfolio ${portfolioid}:`, stocks);
+
+          const portfolioName = document.createElement('h2');
+          portfolioName.textContent = `Stocks for Portfolio: ${portfolioNameText}`;
+          mainContent.insertBefore(portfolioName, mainContent.firstChild);
+
+          tableBody.innerHTML = '';
+          await Promise.all(stocks.map(stock => updateStockRow(stock)));
+
+          mainContent.style.display = 'block';
+        } catch (error) {
+          console.error(`Error fetching stocks for portfolio ${portfolioid}:`, error);
+        }
+      };
+
+      const updateStockRow = async (stock) => {
+        let currentPrice = cache[stock.symbol] && (Date.now() - cache[stock.symbol].timestamp < cacheDuration) ? cache[stock.symbol].price : null;
+
+        if (!currentPrice) {
+          currentPrice = await fetchCurrentPriceWithRetry(stock.symbol);
+          if (currentPrice !== null) {
+            cache[stock.symbol] = { price: currentPrice, timestamp: Date.now() };
+          }
+        }
+
+        const priceDifference = currentPrice !== null ? (currentPrice - stock.buy_price).toFixed(2) : 'N/A';
+        const formattedBuyPrice = stock.buy_price ? parseFloat(stock.buy_price).toFixed(2) : 0;
+        const formattedQuantity = stock.volume || 0;
+        const formattedCurrentPrice = currentPrice !== null ? parseFloat(currentPrice).toFixed(2) : 0;
+        const amountGainedLost = currentPrice !== null ? (formattedCurrentPrice * formattedQuantity) - (formattedBuyPrice * formattedQuantity) : 0;
+        const amountClass = amountGainedLost >= 0 ? 'positive' : 'negative';
+
+        const buyDate = new Date(stock.buy_date);
+        const formattedBuyDate = buyDate.toLocaleDateString('en-GB', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric'
+        });
+
+        console.log(`Updating row for ${stock.symbol} with current price: ${formattedCurrentPrice}, price difference: ${priceDifference}, and amount gained/lost: ${amountGainedLost}`);
+
+        const row = document.createElement('tr');
+        row.innerHTML = `
+          <td>${stock.id || 'N/A'}</td>
+          <td>${stock.name || 'N/A'}</td>
+          <td>$${formattedBuyPrice}</td>
+          <td>${formattedBuyDate}</td>
+          <td>$${formattedCurrentPrice}</td>
+          <td>${priceDifference !== 'N/A' ? `$${priceDifference}` : 'N/A'}</td>
+          <td class="amount ${amountClass}">$${amountGainedLost.toFixed(2)}</td>
+          <td>${formattedQuantity}</td>
+          <td>${stock.exchange || 'N/A'}</td>
+          <td>${stock.sector || 'N/A'}</td>
+        `;
+        tableBody.appendChild(row);
+      };
+
+      const fetchCurrentPriceWithRetry = async (symbol, retries = 3, delayMs = 1000) => {
+        for (let attempt = 1; attempt <= retries; attempt++) {
+          try {
+            const response = await axios.get('https://yfapi.net/v6/finance/quote', {
+              params: { symbols: symbol },
+              headers: { 'x-api-key': apiKey }
+            });
+            console.log(`Fetched current price for ${symbol}:`, response.data);
+
+            if (response.data.quoteResponse.result.length === 0) {
+              console.error(`No data found for symbol: ${symbol}`);
+              return null;
+            }
+
+            const currentPrice = response.data.quoteResponse.result[0].regularMarketPrice;
+            return currentPrice;
+          } catch (error) {
+            if (error.response && error.response.status === 429 && attempt < retries) {
+              console.warn(`Rate limit exceeded for ${symbol}, retrying in ${delayMs * attempt}ms...`);
+              await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
+            } else {
+              console.error(`Failed to fetch current price for ${symbol} after ${attempt} attempts:`, error);
+              return null;
+            }
+          }
+        }
+        return null;
+      };
+
+      fetchPortfolios();
+    });
+  </script>
+</body>
+</html>

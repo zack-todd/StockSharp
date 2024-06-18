@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stocks Portfolio</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+</head>
+<body>
+  <h1>Stocks Portfolio</h1>
+  <div class="chart-container">
+    <canvas id="sectorChart"></canvas>
+  </div>
+  <div class="chart-container">
+    <canvas id="lineChart"></canvas>
+  </div>
+  <table id="stocksTable">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Name</th>
+        <th>Buy Price</th>
+        <th>Buy Date</th>
+        <th>Current Price</th>
+        <th>Price Difference</th>
+        <th>Amount Gained/Lost</th>
+        <th>Quantity</th>
+        <th>Exchange</th>
+        <th>Sector</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+  <script>
+    const apiKey = 'hm3ZDMECS42P8qWzyQha7afYendO20Ft8yUtQXVS';
+    const cacheDuration = 5 * 60 * 1000; 
+    const cache = {};
+
+    document.addEventListener('DOMContentLoaded', () => {
+      fetch('http://localhost:3000/api/stocks')
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`HTTP error! Status: ${response.status}`);
+          }
+          return response.json();
+        })
+        .then(data => {
+          console.log('Fetched data:', data);
+
+          if (data.length === 0) {
+            console.error('No data fetched.');
+            return;
+          }
+
+          const labels = [];
+          const values = [];
+          const buyPrices = [];
+          const currentPrices = [];
+          const tableBody = document.querySelector('#stocksTable tbody');
+          tableBody.innerHTML = '';
+
+          const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+          const fetchCurrentPrice = async (symbol) => {
+            const options = {
+              method: 'GET',
+              url: 'https://yfapi.net/v6/finance/quote',
+              params: { symbols: symbol },
+              headers: {
+                'x-api-key': apiKey
+              }
+            };
+
+            try {
+              const response = await axios.request(options);
+              console.log(`Fetched current price for ${symbol}:`, response.data);
+
+              if (response.data.quoteResponse.result.length === 0) {
+                console.error(`No data found for symbol: ${symbol}`);
+                return null;
+              }
+
+              const currentPrice = response.data.quoteResponse.result[0].regularMarketPrice;
+              return currentPrice;
+            } catch (error) {
+              console.error(`Error fetching current price for ${symbol}:`, error.response ? error.response.data : error.message);
+              return null;
+            }
+          };
+
+          const fetchCurrentPriceWithRetry = async (symbol, retries = 3, delayMs = 1000) => {
+            for (let attempt = 1; attempt <= retries; attempt++) {
+              try {
+                return await fetchCurrentPrice(symbol);
+              } catch (error) {
+                if (error.response && error.response.status === 429 && attempt < retries) {
+                  console.warn(`Rate limit exceeded for ${symbol}, retrying in ${delayMs * attempt}ms...`);
+                  await delay(delayMs * attempt);  
+                } else {
+                  console.error(`Failed to fetch current price for ${symbol} after ${attempt} attempts`);
+                  return null;
+                }
+              }
+            }
+            return null;
+          };
+
+          const updateStockRow = async (stock) => {
+            let currentPrice = cache[stock.symbol] && (Date.now() - cache[stock.symbol].timestamp < cacheDuration) ? cache[stock.symbol].price : null;
+
+            if (!currentPrice) {
+              await delay(1000);  
+              currentPrice = await fetchCurrentPriceWithRetry(stock.symbol);
+              if (currentPrice !== null) {
+                cache[stock.symbol] = { price: currentPrice, timestamp: Date.now() };
+              }
+            }
+
+            const priceDifference = currentPrice !== null ? (currentPrice - stock.buy_price).toFixed(2) : 'N/A';
+            const formattedBuyPrice = stock.buy_price ? parseFloat(stock.buy_price).toFixed(2) : 0;
+            const formattedQuantity = stock.volume || 0;
+            const formattedCurrentPrice = currentPrice !== null ? parseFloat(currentPrice).toFixed(2) : 0;
+
+            const amountGainedLost = currentPrice !== null ? (formattedCurrentPrice * formattedQuantity) - (formattedBuyPrice * formattedQuantity) : 0;
+
+            const buyDate = new Date(stock.buy_date);
+            const formattedBuyDate = buyDate.toLocaleDateString('en-GB', {
+              day: '2-digit',
+              month: '2-digit',
+              year: 'numeric'
+            });
+
+            console.log(`Updating row for ${stock.symbol} with current price: ${formattedCurrentPrice}, price difference: ${priceDifference}, and amount gained/lost: ${amountGainedLost}`);
+
+            const row = document.createElement('tr');
+            
+            const amountClass = amountGainedLost >= 0 ? 'positive' : 'negative';
+
+            row.innerHTML = `
+              <td>${stock.id || 'N/A'}</td>
+              <td>${stock.name || 'N/A'}</td>
+              <td>$${formattedBuyPrice}</td>
+              <td>${formattedBuyDate}</td>
+              <td>$${formattedCurrentPrice}</td>
+              <td>${priceDifference !== 'N/A' ? `$${priceDifference}` : 'N/A'}</td>
+              <td class="amount ${amountClass}">$${amountGainedLost.toFixed(2)}</td>
+              <td>${formattedQuantity}</td>
+              <td>${stock.exchange || 'N/A'}</td>
+              <td>${stock.sector || 'N/A'}</td>
+            `;
+            tableBody.appendChild(row);
+
+            labels.push(stock.symbol);
+            values.push(stock.buy_price);
+            buyPrices.push(formattedBuyPrice);
+            currentPrices.push(formattedCurrentPrice);
+          };
+
+          Promise.all(data.map(stock => updateStockRow(stock))).then(() => {
+            const colors = labels.map(() => '#' + Math.floor(Math.random() * 16777215).toString(16));
+
+            const ctx = document.getElementById('sectorChart').getContext('2d');
+            new Chart(ctx, {
+              type: 'pie',
+              data: {
+                labels: labels,
+                datasets: [{
+                  label: 'Buy Price',
+                  data: values,
+                  backgroundColor: colors,
+                }]
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                legend: {
+                  position: 'bottom',
+                }
+              }
+            });
+
+            const lineCtx = document.getElementById('lineChart').getContext('2d');
+            new Chart(lineCtx, {
+              type: 'line',
+              data: {
+                labels: labels,
+                datasets: [
+                  {
+                    label: 'Buy Price',
+                    data: buyPrices,
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    fill: false,
+                  },
+                  {
+                    label: 'Current Price',
+                    data: currentPrices,
+                    borderColor: 'rgba(153, 102, 255, 1)',
+                    fill: false,
+                  }
+                ]
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                  x: {
+                    title: {
+                      display: true,
+                      text: 'Stock Symbol'
+                    }
+                  },
+                  y: {
+                    title: {
+                      display: true,
+                      text: 'Price'
+                    }
+                  }
+                }
+              }
+            });
+          });
+
+        })
+        .catch(error => {
+          console.error('Error fetching or parsing data:', error);
+          const errorContainer = document.createElement('div');
+          errorContainer.textContent = 'Failed to fetch or parse data for the pie chart.';
+          document.body.appendChild(errorContainer);
+        });
+    });
+  </script>
+</body>
+</html>
